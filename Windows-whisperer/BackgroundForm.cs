@@ -89,13 +89,13 @@ namespace WindowsWhispererWidget
                     if (key == Keys.LControlKey || key == Keys.RControlKey)
                     {
                         isCtrlDown = true;
-                        Console.WriteLine($"Ctrl key pressed at {DateTime.Now}");
+                        // Console.WriteLine($"Ctrl key pressed at {DateTime.Now}");
                         CheckKeyCombo();
                     }
                     else if (key == Keys.LShiftKey || key == Keys.RShiftKey)
                     {
                         isShiftDown = true;
-                        Console.WriteLine($"Shift key pressed at {DateTime.Now}");
+                        // Console.WriteLine($"Shift key pressed at {DateTime.Now}");
                         CheckKeyCombo();
                     }
                 }
@@ -104,7 +104,7 @@ namespace WindowsWhispererWidget
                     if (key == Keys.LControlKey || key == Keys.RControlKey)
                     {
                         isCtrlDown = false;
-                        Console.WriteLine($"Ctrl key released at {DateTime.Now}");
+                        // Console.WriteLine($"Ctrl key released at {DateTime.Now}");
                         if (isRecording)
                         {
                             StopRecordingAndTranscribe();
@@ -113,7 +113,7 @@ namespace WindowsWhispererWidget
                     else if (key == Keys.LShiftKey || key == Keys.RShiftKey)
                     {
                         isShiftDown = false;
-                        Console.WriteLine($"Shift key released at {DateTime.Now}");
+                        // Console.WriteLine($"Shift key released at {DateTime.Now}");
                         if (isRecording)
                         {
                             StopRecordingAndTranscribe();
@@ -159,7 +159,6 @@ namespace WindowsWhispererWidget
         {
             if (isCtrlDown && isShiftDown && !isRecording && !isProcessing)
             {
-                Console.WriteLine($"Both Ctrl + Shift are being held at {DateTime.Now}");
                 StartRecording();
             }
         }
@@ -168,6 +167,13 @@ namespace WindowsWhispererWidget
         {
             try
             {
+                // Dispose of any existing audio stream
+                if (audioStream != null)
+                {
+                    audioStream.Dispose();
+                    audioStream = null;
+                }
+                
                 audioStream = new MemoryStream();
                 isRecording = true;
                 waveSource.StartRecording();
@@ -192,6 +198,14 @@ namespace WindowsWhispererWidget
                 isRecording = false;
                 waveSource.StopRecording();
                 Console.WriteLine("Recording stopped...");
+
+                if (audioStream == null || audioStream.Length == 0)
+                {
+                    Console.WriteLine("No audio data recorded");
+                    _notifyIcon?.ShowBalloonTip(2000, "Error", "No audio data recorded", ToolTipIcon.Error);
+                    isProcessing = false;
+                    return;
+                }
 
                 // Convert memory stream to WAV file with proper headers
                 audioStream.Position = 0;
@@ -287,19 +301,49 @@ namespace WindowsWhispererWidget
 
         void InsertTextAtCursor(string text)
         {
+            if (string.IsNullOrEmpty(text))
+            {
+                Console.WriteLine("No text to insert");
+                return;
+            }
+
+            string previousClipboardText = "";
             try
             {
-                string previousClipboardText = Clipboard.GetText();
+                // Store previous clipboard content if any
+                if (Clipboard.ContainsText())
+                {
+                    previousClipboardText = Clipboard.GetText();
+                }
+
+                // Clear clipboard before setting new text
+                Clipboard.Clear();
                 Clipboard.SetText(text);
                 SendKeys.SendWait("^v");
-                if (!string.IsNullOrEmpty(previousClipboardText))
-                {
-                    Clipboard.SetText(previousClipboardText);
-                }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error inserting text: {ex.Message}");
+                _notifyIcon?.ShowBalloonTip(2000, "Error", "Failed to insert text", ToolTipIcon.Error);
+            }
+            finally
+            {
+                // Restore previous clipboard content
+                try
+                {
+                    if (!string.IsNullOrEmpty(previousClipboardText))
+                    {
+                        Clipboard.SetText(previousClipboardText);
+                    }
+                    else
+                    {
+                        Clipboard.Clear();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error restoring clipboard: {ex.Message}");
+                }
             }
         }
 
