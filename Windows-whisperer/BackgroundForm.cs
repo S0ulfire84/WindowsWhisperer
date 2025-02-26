@@ -18,7 +18,7 @@ namespace WindowsWhispererWidget
         private const int WM_KEYUP = 0x0101;
 
         private bool isCtrlDown = false;
-        private bool isShiftDown = false;
+        private bool isWinDown = false;
         private WaveInEvent waveSource;
         private MemoryStream audioStream;
         private bool isRecording = false;
@@ -89,13 +89,11 @@ namespace WindowsWhispererWidget
                     if (key == Keys.LControlKey || key == Keys.RControlKey)
                     {
                         isCtrlDown = true;
-                        // Console.WriteLine($"Ctrl key pressed at {DateTime.Now}");
                         CheckKeyCombo();
                     }
-                    else if (key == Keys.LShiftKey || key == Keys.RShiftKey)
+                    else if (key == Keys.LWin || key == Keys.RWin)
                     {
-                        isShiftDown = true;
-                        // Console.WriteLine($"Shift key pressed at {DateTime.Now}");
+                        isWinDown = true;
                         CheckKeyCombo();
                     }
                 }
@@ -104,16 +102,14 @@ namespace WindowsWhispererWidget
                     if (key == Keys.LControlKey || key == Keys.RControlKey)
                     {
                         isCtrlDown = false;
-                        // Console.WriteLine($"Ctrl key released at {DateTime.Now}");
                         if (isRecording)
                         {
                             StopRecordingAndTranscribe();
                         }
                     }
-                    else if (key == Keys.LShiftKey || key == Keys.RShiftKey)
+                    else if (key == Keys.LWin || key == Keys.RWin)
                     {
-                        isShiftDown = false;
-                        // Console.WriteLine($"Shift key released at {DateTime.Now}");
+                        isWinDown = false;
                         if (isRecording)
                         {
                             StopRecordingAndTranscribe();
@@ -157,7 +153,7 @@ namespace WindowsWhispererWidget
 
         private void CheckKeyCombo()
         {
-            if (isCtrlDown && isShiftDown && !isRecording && !isProcessing)
+            if (isCtrlDown && isWinDown && !isRecording && !isProcessing)
             {
                 StartRecording();
             }
