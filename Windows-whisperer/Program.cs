@@ -15,7 +15,7 @@ namespace WindowsWhispererWidget
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             AllocConsole();
-            Console.WriteLine("Application started. Waiting for hotkey...");
+            Console.WriteLine("Application started. Press and hold 'Windows + Ctrl' to start recording, release to transcribe...");
             Application.Run(new BackgroundForm());
         }
     }
