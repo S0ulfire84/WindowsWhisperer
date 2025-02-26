@@ -3,42 +3,125 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using NAudio.Wave;
 using Microsoft.Extensions.Configuration;
-using OpenAI_API;
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Diagnostics;
 
 namespace WindowsWhispererWidget
 {
     public partial class BackgroundForm : Form
     {
-        // Constants for modifiers
-        const int MOD_CONTROL = 0x2;
-        const int MOD_SHIFT = 0x4;
-        const int WM_HOTKEY = 0x0312;
-        const int WM_KEYUP = 0x0101;
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
 
-        // Hotkey ID
-        const int HOTKEY_ID = 9000;
-
+        private bool isCtrlDown = false;
+        private bool isShiftDown = false;
         private WaveInEvent waveSource;
         private MemoryStream audioStream;
         private bool isRecording = false;
         private string openAiApiKey;
+        private readonly HttpClient httpClient;
+        private IntPtr _hookID = IntPtr.Zero;
+        private bool isProcessing = false;
+        private NotifyIcon? _notifyIcon;
 
-        [DllImport("user32.dll")]
-        public static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private LowLevelKeyboardProc _proc;
 
-        [DllImport("user32.dll")]
-        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
 
         public BackgroundForm()
         {
             InitializeComponent();
+            httpClient = new HttpClient();
+            httpClient.BaseAddress = new Uri("https://api.openai.com/v1/");
             LoadConfiguration();
             InitializeAudioRecording();
             
+            _proc = HookCallback;
+            _hookID = SetHook(_proc);
+
+            // Initialize NotifyIcon
+            _notifyIcon = new NotifyIcon
+            {
+                Icon = SystemIcons.Information,
+                Visible = true
+            };
+
             // Hide the form and remove from taskbar
             this.WindowState = FormWindowState.Minimized;
             this.ShowInTaskbar = false;
+        }
+
+        private IntPtr SetHook(LowLevelKeyboardProc proc)
+        {
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.MainModule)
+            {
+                return SetWindowsHookEx(WH_KEYBOARD_LL, proc,
+                    GetModuleHandle(curModule.ModuleName), 0);
+            }
+        }
+
+        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                int vkCode = Marshal.ReadInt32(lParam);
+                Keys key = (Keys)vkCode;
+
+                if (wParam == (IntPtr)WM_KEYDOWN)
+                {
+                    if (key == Keys.LControlKey || key == Keys.RControlKey)
+                    {
+                        isCtrlDown = true;
+                        Console.WriteLine($"Ctrl key pressed at {DateTime.Now}");
+                        CheckKeyCombo();
+                    }
+                    else if (key == Keys.LShiftKey || key == Keys.RShiftKey)
+                    {
+                        isShiftDown = true;
+                        Console.WriteLine($"Shift key pressed at {DateTime.Now}");
+                        CheckKeyCombo();
+                    }
+                }
+                else if (wParam == (IntPtr)WM_KEYUP)
+                {
+                    if (key == Keys.LControlKey || key == Keys.RControlKey)
+                    {
+                        isCtrlDown = false;
+                        Console.WriteLine($"Ctrl key released at {DateTime.Now}");
+                        if (isRecording)
+                        {
+                            StopRecordingAndTranscribe();
+                        }
+                    }
+                    else if (key == Keys.LShiftKey || key == Keys.RShiftKey)
+                    {
+                        isShiftDown = false;
+                        Console.WriteLine($"Shift key released at {DateTime.Now}");
+                        if (isRecording)
+                        {
+                            StopRecordingAndTranscribe();
+                        }
+                    }
+                }
+            }
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
         }
 
         private void LoadConfiguration()
@@ -54,6 +137,7 @@ namespace WindowsWhispererWidget
                 MessageBox.Show("Please set your OpenAI API key in appsettings.json");
                 Application.Exit();
             }
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", openAiApiKey);
         }
 
         private void InitializeAudioRecording()
@@ -71,31 +155,13 @@ namespace WindowsWhispererWidget
             }
         }
 
-        protected override void OnHandleCreated(EventArgs e)
+        private void CheckKeyCombo()
         {
-            base.OnHandleCreated(e);
-            RegisterHotKey(this.Handle, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, (int)Keys.T);
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HOTKEY_ID)
+            if (isCtrlDown && isShiftDown && !isRecording && !isProcessing)
             {
-                if (!isRecording)
-                {
-                    StartRecording();
-                }
+                Console.WriteLine($"Both Ctrl + Shift are being held at {DateTime.Now}");
+                StartRecording();
             }
-            else if (m.Msg == WM_KEYUP)
-            {
-                // Check if either Ctrl or Shift is released
-                Keys keyCode = (Keys)m.WParam.ToInt32();
-                if ((keyCode == Keys.ControlKey || keyCode == Keys.ShiftKey) && isRecording)
-                {
-                    StopRecordingAndTranscribe();
-                }
-            }
-            base.WndProc(ref m);
         }
 
         private void StartRecording()
@@ -115,36 +181,107 @@ namespace WindowsWhispererWidget
 
         private async void StopRecordingAndTranscribe()
         {
+            if (isProcessing) return;
+            
+            isProcessing = true;
+            _notifyIcon?.ShowBalloonTip(1000, "Processing", "Converting speech to text...", ToolTipIcon.Info);
+
+            string tempFile = Path.Combine(Path.GetTempPath(), "recording.wav");
             try
             {
                 isRecording = false;
                 waveSource.StopRecording();
                 Console.WriteLine("Recording stopped...");
 
-                // Convert to WAV
-                byte[] audioData = audioStream.ToArray();
+                // Convert memory stream to WAV file with proper headers
+                audioStream.Position = 0;
+                using (var writer = new WaveFileWriter(tempFile, waveSource.WaveFormat))
+                {
+                    audioStream.Position = 0;
+                    audioStream.CopyTo(writer);
+                }
+                
                 audioStream.Dispose();
                 audioStream = null;
 
-                // Save to temporary file
-                string tempFile = Path.Combine(Path.GetTempPath(), "recording.wav");
-                File.WriteAllBytes(tempFile, audioData);
+                Console.WriteLine($"Created WAV file at: {tempFile}");
+                Console.WriteLine($"File size: {new FileInfo(tempFile).Length} bytes");
 
-                // Initialize OpenAI API client
-                var api = new OpenAI_API.OpenAIAPI(openAiApiKey);
+                // Create multipart form content and ensure all streams are properly disposed
+                using (var formData = new MultipartFormDataContent())
+                {
+                    using (var fileStream = new FileStream(tempFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var fileContent = new StreamContent(fileStream))
+                    {
+                        fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse("audio/wav");
+                        formData.Add(fileContent, "file", "recording.wav");
+                        formData.Add(new StringContent("whisper-1"), "model");
 
-                // Transcribe using Whisper
-                var result = await api.Audio.CreateTranscriptionAsync(tempFile);
-                
-                // Insert transcribed text at cursor
-                InsertTextAtCursor(result.Text);
+                        Console.WriteLine("Sending request to Whisper API...");
+                        var response = await httpClient.PostAsync("audio/transcriptions", formData);
+                        var responseContent = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"Raw API Response: {responseContent}");
 
-                // Clean up temp file
-                File.Delete(tempFile);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            try 
+                            {
+                                var options = new JsonSerializerOptions
+                                {
+                                    PropertyNameCaseInsensitive = true
+                                };
+                                var result = JsonSerializer.Deserialize<WhisperResponse>(responseContent, options);
+                                Console.WriteLine($"Deserialized result: {result?.Text ?? "null"}");
+                                
+                                if (!string.IsNullOrEmpty(result?.Text))
+                                {
+                                    Console.WriteLine($"Received transcription: {result.Text}");
+                                    InsertTextAtCursor(result.Text);
+                                    _notifyIcon?.ShowBalloonTip(1000, "Success", "Text transcribed successfully!", ToolTipIcon.Info);
+                                }
+                                else
+                                {
+                                    Console.WriteLine("No transcription text in the response");
+                                    _notifyIcon?.ShowBalloonTip(2000, "Error", "No transcription received from the API", ToolTipIcon.Error);
+                                }
+                            }
+                            catch (JsonException ex)
+                            {
+                                Console.WriteLine($"JSON Deserialization error: {ex.Message}");
+                                Console.WriteLine($"Response content was: {responseContent}");
+                                _notifyIcon?.ShowBalloonTip(2000, "Error", "Failed to process API response", ToolTipIcon.Error);
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"API Error Response: {responseContent}");
+                            _notifyIcon?.ShowBalloonTip(2000, "Error", "Transcription failed", ToolTipIcon.Error);
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error processing audio: {ex.Message}");
+                Console.WriteLine($"Exception details: {ex}");
+                _notifyIcon?.ShowBalloonTip(2000, "Error", "Error processing audio", ToolTipIcon.Error);
+            }
+            finally
+            {
+                isProcessing = false;
+                
+                // Ensure we always try to delete the temporary file
+                try
+                {
+                    if (File.Exists(tempFile))
+                    {
+                        File.Delete(tempFile);
+                        Console.WriteLine("Temporary file deleted successfully");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error deleting temporary file: {ex.Message}");
+                }
             }
         }
 
@@ -168,6 +305,10 @@ namespace WindowsWhispererWidget
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (_hookID != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_hookID);
+            }
             if (waveSource != null)
             {
                 waveSource.Dispose();
@@ -176,8 +317,20 @@ namespace WindowsWhispererWidget
             {
                 audioStream.Dispose();
             }
-            UnregisterHotKey(this.Handle, HOTKEY_ID);
+            if (httpClient != null)
+            {
+                httpClient.Dispose();
+            }
+            if (_notifyIcon != null)
+            {
+                _notifyIcon.Dispose();
+            }
             base.OnFormClosing(e);
+        }
+
+        private class WhisperResponse
+        {
+            public string? Text { get; set; }
         }
     }
 } 
