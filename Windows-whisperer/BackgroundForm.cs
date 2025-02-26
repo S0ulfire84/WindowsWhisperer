@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Media;
 
 namespace WindowsWhispererWidget
 {
@@ -27,6 +28,7 @@ namespace WindowsWhispererWidget
         private IntPtr _hookID = IntPtr.Zero;
         private bool isProcessing = false;
         private NotifyIcon? _notifyIcon;
+        private readonly SoundPlayer recordingSound;
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
         private LowLevelKeyboardProc _proc;
@@ -51,6 +53,10 @@ namespace WindowsWhispererWidget
             httpClient.BaseAddress = new Uri("https://api.openai.com/v1/");
             LoadConfiguration();
             InitializeAudioRecording();
+            
+            // Initialize sound player with the custom sound
+            string soundPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "start-recording.wav");
+            recordingSound = new SoundPlayer(soundPath);
             
             _proc = HookCallback;
             _hookID = SetHook(_proc);
@@ -173,6 +179,7 @@ namespace WindowsWhispererWidget
                 audioStream = new MemoryStream();
                 isRecording = true;
                 waveSource.StartRecording();
+                recordingSound.Play();
                 Console.WriteLine("Recording started...");
             }
             catch (Exception ex)
@@ -186,7 +193,8 @@ namespace WindowsWhispererWidget
             if (isProcessing) return;
             
             isProcessing = true;
-            _notifyIcon?.ShowBalloonTip(1000, "Processing", "Converting speech to text...", ToolTipIcon.Info);
+            recordingSound.Play();
+            Console.WriteLine("Processing audio...");
 
             string tempFile = Path.Combine(Path.GetTempPath(), "recording.wav");
             try
@@ -247,7 +255,6 @@ namespace WindowsWhispererWidget
                                 {
                                     Console.WriteLine($"Received transcription: {result.Text}");
                                     InsertTextAtCursor(result.Text);
-                                    _notifyIcon?.ShowBalloonTip(1000, "Success", "Text transcribed successfully!", ToolTipIcon.Info);
                                 }
                                 else
                                 {
@@ -364,6 +371,10 @@ namespace WindowsWhispererWidget
             if (_notifyIcon != null)
             {
                 _notifyIcon.Dispose();
+            }
+            if (recordingSound != null)
+            {
+                recordingSound.Dispose();
             }
             base.OnFormClosing(e);
         }
