@@ -238,7 +238,7 @@ namespace WindowsWhispererWidget
                         Console.WriteLine("Sending request to Whisper API...");
                         var response = await httpClient.PostAsync("audio/transcriptions", formData);
                         var responseContent = await response.Content.ReadAsStringAsync();
-                        Console.WriteLine($"Raw API Response: {responseContent}");
+                        // Console.WriteLine($"Raw API Response: {responseContent}");
 
                         if (response.IsSuccessStatusCode)
                         {
@@ -311,6 +311,7 @@ namespace WindowsWhispererWidget
             }
 
             string previousClipboardText = "";
+            bool insertionFailed = false;
             try
             {
                 // Store previous clipboard content if any
@@ -326,26 +327,44 @@ namespace WindowsWhispererWidget
             }
             catch (Exception ex)
             {
+                insertionFailed = true;
                 Console.WriteLine($"Error inserting text: {ex.Message}");
-                _notifyIcon?.ShowBalloonTip(2000, "Error", "Failed to insert text", ToolTipIcon.Error);
+                // Keep the transcribed text in clipboard instead of restoring previous content
+                try 
+                {
+                    Clipboard.SetText(text);
+                    _notifyIcon?.ShowBalloonTip(3000, "Transcription Available", 
+                        "Failed to insert text at cursor position. Your transcription is available in the clipboard.", 
+                        ToolTipIcon.Info);
+                }
+                catch (Exception clipEx)
+                {
+                    Console.WriteLine($"Error setting clipboard: {clipEx.Message}");
+                    _notifyIcon?.ShowBalloonTip(2000, "Error", 
+                        "Failed to insert text and store in clipboard", 
+                        ToolTipIcon.Error);
+                }
             }
             finally
             {
-                // Restore previous clipboard content
-                try
+                // Only restore previous clipboard content if insertion succeeded
+                if (!insertionFailed)
                 {
-                    if (!string.IsNullOrEmpty(previousClipboardText))
+                    try
                     {
-                        Clipboard.SetText(previousClipboardText);
+                        if (!string.IsNullOrEmpty(previousClipboardText))
+                        {
+                            Clipboard.SetText(previousClipboardText);
+                        }
+                        else
+                        {
+                            Clipboard.Clear();
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Clipboard.Clear();
+                        Console.WriteLine($"Error restoring clipboard: {ex.Message}");
                     }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error restoring clipboard: {ex.Message}");
                 }
             }
         }
