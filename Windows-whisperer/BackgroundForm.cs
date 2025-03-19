@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Diagnostics;
 using System.Media;
+using System.Threading;
 
 namespace WindowsWhispererWidget
 {
@@ -196,7 +197,11 @@ namespace WindowsWhispererWidget
             recordingSound.Play();
             Console.WriteLine("Processing audio...");
 
-            string tempFile = Path.Combine(Path.GetTempPath(), "recording.wav");
+            // Generate unique filename for this recording
+            string uniqueFileName = $"recording_{Guid.NewGuid()}.wav";
+            string tempFile = Path.Combine(Path.GetTempPath(), uniqueFileName);
+            Console.WriteLine($"Using temporary file: {tempFile}");
+
             try
             {
                 isRecording = false;
@@ -236,43 +241,60 @@ namespace WindowsWhispererWidget
                         formData.Add(new StringContent("whisper-1"), "model");
 
                         Console.WriteLine("Sending request to Whisper API...");
-                        var response = await httpClient.PostAsync("audio/transcriptions", formData);
-                        var responseContent = await response.Content.ReadAsStringAsync();
-                        // Console.WriteLine($"Raw API Response: {responseContent}");
-
-                        if (response.IsSuccessStatusCode)
+                        
+                        // Set a reasonable timeout for the API request
+                        using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2)))
                         {
-                            try 
+                            try
                             {
-                                var options = new JsonSerializerOptions
+                                var response = await httpClient.PostAsync("audio/transcriptions", formData, cts.Token);
+                                var responseContent = await response.Content.ReadAsStringAsync();
+
+                                if (response.IsSuccessStatusCode)
                                 {
-                                    PropertyNameCaseInsensitive = true
-                                };
-                                var result = JsonSerializer.Deserialize<WhisperResponse>(responseContent, options);
-                                Console.WriteLine($"Deserialized result: {result?.Text ?? "null"}");
-                                
-                                if (!string.IsNullOrEmpty(result?.Text))
-                                {
-                                    Console.WriteLine($"Received transcription: {result.Text}");
-                                    InsertTextAtCursor(result.Text);
+                                    try 
+                                    {
+                                        var options = new JsonSerializerOptions
+                                        {
+                                            PropertyNameCaseInsensitive = true
+                                        };
+                                        var result = JsonSerializer.Deserialize<WhisperResponse>(responseContent, options);
+                                        Console.WriteLine($"Deserialized result: {result?.Text ?? "null"}");
+                                        
+                                        if (!string.IsNullOrEmpty(result?.Text))
+                                        {
+                                            Console.WriteLine($"Received transcription: {result.Text}");
+                                            InsertTextAtCursor(result.Text);
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("No transcription text in the response");
+                                            _notifyIcon?.ShowBalloonTip(2000, "Error", "No transcription received from the API", ToolTipIcon.Error);
+                                        }
+                                    }
+                                    catch (JsonException ex)
+                                    {
+                                        Console.WriteLine($"JSON Deserialization error: {ex.Message}");
+                                        Console.WriteLine($"Response content was: {responseContent}");
+                                        _notifyIcon?.ShowBalloonTip(2000, "Error", "Failed to process API response", ToolTipIcon.Error);
+                                    }
                                 }
                                 else
                                 {
-                                    Console.WriteLine("No transcription text in the response");
-                                    _notifyIcon?.ShowBalloonTip(2000, "Error", "No transcription received from the API", ToolTipIcon.Error);
+                                    Console.WriteLine($"API Error Response: {responseContent}");
+                                    _notifyIcon?.ShowBalloonTip(2000, "Error", "Transcription failed", ToolTipIcon.Error);
                                 }
                             }
-                            catch (JsonException ex)
+                            catch (OperationCanceledException)
                             {
-                                Console.WriteLine($"JSON Deserialization error: {ex.Message}");
-                                Console.WriteLine($"Response content was: {responseContent}");
-                                _notifyIcon?.ShowBalloonTip(2000, "Error", "Failed to process API response", ToolTipIcon.Error);
+                                Console.WriteLine("API request timed out after 2 minutes");
+                                _notifyIcon?.ShowBalloonTip(2000, "Error", "Request timed out. Please try again.", ToolTipIcon.Error);
                             }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"API Error Response: {responseContent}");
-                            _notifyIcon?.ShowBalloonTip(2000, "Error", "Transcription failed", ToolTipIcon.Error);
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"API request error: {ex.Message}");
+                                _notifyIcon?.ShowBalloonTip(2000, "Error", "Failed to connect to the API. Please try again.", ToolTipIcon.Error);
+                            }
                         }
                     }
                 }
