@@ -18,9 +18,12 @@ namespace WindowsWhispererWidget
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_KEYUP = 0x0101;
+        private const int KEY_STATE_TIMEOUT_MS = 1000; // 1 second timeout for key states
 
         private bool isCtrlDown = false;
         private bool isWinDown = false;
+        private DateTime lastKeyPressTime = DateTime.MinValue;
+        private DateTime lastKeyReleaseTime = DateTime.MinValue;
         private WaveInEvent waveSource;
         private MemoryStream audioStream;
         private bool isRecording = false;
@@ -30,6 +33,7 @@ namespace WindowsWhispererWidget
         private bool isProcessing = false;
         private NotifyIcon? _notifyIcon;
         private readonly SoundPlayer recordingSound;
+        private System.Windows.Forms.Timer keyStateTimer;
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
         private LowLevelKeyboardProc _proc;
@@ -62,6 +66,12 @@ namespace WindowsWhispererWidget
             _proc = HookCallback;
             _hookID = SetHook(_proc);
 
+            // Initialize key state timer
+            keyStateTimer = new System.Windows.Forms.Timer();
+            keyStateTimer.Interval = 100; // Check every 100ms
+            keyStateTimer.Tick += KeyStateTimer_Tick;
+            keyStateTimer.Start();
+
             // Initialize NotifyIcon
             _notifyIcon = new NotifyIcon
             {
@@ -84,6 +94,22 @@ namespace WindowsWhispererWidget
             }
         }
 
+        private void KeyStateTimer_Tick(object sender, EventArgs e)
+        {
+            // Reset key states if they've been held too long
+            if (isCtrlDown || isWinDown)
+            {
+                var timeSinceLastPress = (DateTime.Now - lastKeyPressTime).TotalMilliseconds;
+                if (timeSinceLastPress > KEY_STATE_TIMEOUT_MS)
+                {
+                    Console.WriteLine("Key state timeout - resetting states");
+                    isCtrlDown = false;
+                    isWinDown = false;
+                    lastKeyPressTime = DateTime.MinValue;
+                }
+            }
+        }
+
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0)
@@ -96,11 +122,15 @@ namespace WindowsWhispererWidget
                     if (key == Keys.LControlKey || key == Keys.RControlKey)
                     {
                         isCtrlDown = true;
+                        lastKeyPressTime = DateTime.Now;
+                        Console.WriteLine("Ctrl key pressed");
                         CheckKeyCombo();
                     }
                     else if (key == Keys.LWin || key == Keys.RWin)
                     {
                         isWinDown = true;
+                        lastKeyPressTime = DateTime.Now;
+                        Console.WriteLine("Windows key pressed");
                         CheckKeyCombo();
                     }
                 }
@@ -109,6 +139,8 @@ namespace WindowsWhispererWidget
                     if (key == Keys.LControlKey || key == Keys.RControlKey)
                     {
                         isCtrlDown = false;
+                        lastKeyReleaseTime = DateTime.Now;
+                        Console.WriteLine("Ctrl key released");
                         if (isRecording)
                         {
                             StopRecordingAndTranscribe();
@@ -117,6 +149,8 @@ namespace WindowsWhispererWidget
                     else if (key == Keys.LWin || key == Keys.RWin)
                     {
                         isWinDown = false;
+                        lastKeyReleaseTime = DateTime.Now;
+                        Console.WriteLine("Windows key released");
                         if (isRecording)
                         {
                             StopRecordingAndTranscribe();
@@ -160,9 +194,15 @@ namespace WindowsWhispererWidget
 
         private void CheckKeyCombo()
         {
+            // Only allow recording if both keys are actually down and we're not already recording
             if (isCtrlDown && isWinDown && !isRecording && !isProcessing)
             {
-                StartRecording();
+                // Additional check to ensure both keys are truly pressed
+                var timeSinceLastRelease = (DateTime.Now - lastKeyReleaseTime).TotalMilliseconds;
+                if (timeSinceLastRelease > 50) // Small delay to ensure both keys are actually pressed
+                {
+                    StartRecording();
+                }
             }
         }
 
@@ -393,6 +433,11 @@ namespace WindowsWhispererWidget
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (keyStateTimer != null)
+            {
+                keyStateTimer.Stop();
+                keyStateTimer.Dispose();
+            }
             if (_hookID != IntPtr.Zero)
             {
                 UnhookWindowsHookEx(_hookID);
