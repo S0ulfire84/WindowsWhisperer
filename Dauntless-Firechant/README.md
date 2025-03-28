@@ -1,6 +1,6 @@
-# Windows Whisperer
+# Dauntless Firechant
 
-Windows Whisperer is a Windows desktop application that provides real-time speech-to-text functionality using OpenAI's Whisper model. It allows you to quickly transcribe your voice into text anywhere in your system by using a global keyboard shortcut.
+Dauntless Firechant is a Windows desktop application that provides real-time speech-to-text functionality using OpenAI's Whisper model. It allows you to quickly transcribe your voice into text anywhere in your system by using a global keyboard shortcut.
 
 ## Features
 
